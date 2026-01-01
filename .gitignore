@@ -129,3 +129,7 @@ dmypy.json
 .pyre/
 
 /tmp/
+
+*.task
+
+.ruff_cache/

@@ -120,3 +120,66 @@ def mls_smooth_numpy(input_t: List[float], input_y: List[np.ndarray], query_t: f
     w = np.maximum(smooth_range - np.abs(input_t), 0)
     coef = moving_least_square_numpy(input_t[broadcaster], input_y, w[broadcaster])
     return coef[..., 0]
+
+
+# --------------------------------------------------------------------------------
+# One Euro Filter (Added for better real-time smoothing)
+# --------------------------------------------------------------------------------
+
+import math
+
+class LowPassFilter:
+    def __init__(self):
+        self.y = None
+        self.s = None
+
+    def __call__(self, x, alpha, timestamp):
+        if self.y is None:
+            s = x
+        else:
+            s = alpha * x + (1.0 - alpha) * self.y
+        self.y = s
+        self.s = s
+        return s
+
+    def last_value(self):
+        return self.y
+
+class OneEuroFilter:
+    def __init__(self, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
+        self.min_cutoff = min_cutoff
+        self.beta = beta
+        self.d_cutoff = d_cutoff
+        self.x_filter = LowPassFilter()
+        self.dx_filter = LowPassFilter()
+        self.last_timestamp = None
+
+    def __call__(self, x, timestamp=None):
+        # If timestamp is not provided, assume constant frame rate (not ideal but works)
+        # Here we expect timestamp to be provided
+        if timestamp is None:
+            if self.last_timestamp is None:
+                timestamp = 0.0
+            else:
+                timestamp = self.last_timestamp + 0.033 # Assume 30fps
+
+        if self.last_timestamp is None:
+            self.last_timestamp = timestamp
+            return self.x_filter(x, 1.0, timestamp)
+
+        dt = timestamp - self.last_timestamp
+        self.last_timestamp = timestamp
+
+        # Avoid division by zero
+        if dt <= 0:
+            return self.x_filter.last_value()
+
+        dx = (x - self.x_filter.last_value()) / dt
+        edx = self.dx_filter(dx, self._alpha(self.d_cutoff, dt), timestamp)
+        
+        cutoff = self.min_cutoff + self.beta * abs(edx)
+        return self.x_filter(x, self._alpha(cutoff, dt), timestamp)
+
+    def _alpha(self, cutoff, dt):
+        r = 2 * math.pi * cutoff * dt
+        return r / (r + 1)

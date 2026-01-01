@@ -1,0 +1,32 @@
+[project]
+name = "live-mocap"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mediapipe>=0.10.31",
+    "numpy>=2.4.0",
+    "opencv-python>=4.11.0.86",
+    "torch>=2.9.1",
+    "tqdm>=4.67.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu" },
+]
+torchvision = [
+  { index = "pytorch-cpu" },
+]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+reportMissingTypeStubs = false
+reportMissingImports = "warning"
+reportUnknownMemberType = false

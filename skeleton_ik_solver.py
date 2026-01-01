@@ -1,81 +1,44 @@
 import os
 import sys
-import ctypes
 import json
 import time
 from typing import Dict, List, Tuple
 import pickle
 
+import os
+import sys
+import time
+import pickle
+from typing import Dict, List, Tuple
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from utils3d import euler_angle_to_matrix, mls_smooth
+from utils3d import euler_angle_to_matrix, mls_smooth, OneEuroFilter
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from skeleton_config import load_skeleton_data, get_optimization_target, get_constraints, get_align_location, get_align_scale, MEDIAPIPE_KEYPOINTS_WITH_HANDS, MEDIAPIPE_KEYPOINTS_WITHOUT_HANDS
 
 
-@torch.jit.script
 def barrier(x: torch.Tensor, a: torch.Tensor, b: torch.Tensor):
     return torch.exp(4 * (x - b)) + torch.exp(4 * (a - x))
 
+
 def eval_matrix_world(parents: torch.Tensor, matrix_bones: torch.Tensor, matrix_basis: torch.Tensor) -> torch.Tensor:
-    "Deprecated"
-    matrix_bones, matrix_basis = matrix_bones.unbind(), matrix_basis.unbind()
+    """
+    Evaluate matrix_world using pure PyTorch.
+    Assumes parents are topologically sorted (parents appear before children in the list).
+    """
     matrix_world = []
-    for i in range(len(matrix_bones)):
-        local_mat = torch.mm(matrix_bones[i], matrix_basis[i])
-        m = local_mat if parents[i] < 0 else torch.mm(matrix_world[parents[i]], local_mat)
+    for i in range(len(parents)):
+        local_mat = torch.matmul(matrix_bones[i], matrix_basis[i])
+        if parents[i] < 0:
+            m = local_mat
+        else:
+            m = torch.matmul(matrix_world[parents[i]], local_mat)
         matrix_world.append(m)
     return torch.stack(matrix_world)
-
-class EvalMatrixWorld(torch.autograd.Function):
-    """
-    Call c++ function to evaluate matrix_world
-    """
-
-    cdll = ctypes.CDLL(os.path.join(os.path.dirname(__file__), 'cpp_eval_bone_matrix/cpp_eval_bone_matrix.dll'))
-    cpp_eval_matrix_world = cdll.eval_matrix_world
-    cpp_grad_matrix_world = cdll.grad_matrix_world
-
-    @staticmethod
-    def forward(ctx, parents: torch.Tensor, matrix_bones: torch.Tensor, matrix_basis: torch.Tensor):
-        assert parents.dtype == torch.int64 and parents.is_contiguous()
-        assert matrix_bones.dtype == torch.float32 and matrix_bones.is_contiguous()
-        assert matrix_basis.dtype == torch.float32 and matrix_basis.is_contiguous()
-
-        matrix_world = torch.zeros_like(matrix_bones)
-
-        EvalMatrixWorld.cpp_eval_matrix_world(
-            ctypes.c_ulonglong(parents.shape[0]),
-            ctypes.c_void_p(parents.data_ptr()),
-            ctypes.c_void_p(matrix_bones.data_ptr()),
-            ctypes.c_void_p(matrix_basis.data_ptr()),
-            ctypes.c_void_p(matrix_world.data_ptr()),
-        )
-        ctx.save_for_backward(parents, matrix_bones, matrix_basis, matrix_world)
-        return matrix_world
-
-    @staticmethod
-    def backward(ctx, grad_out):
-        assert grad_out.dtype == torch.float32 and grad_out.is_contiguous()
-
-        parents, matrix_bones, matrix_basis, matrix_world = ctx.saved_tensors
-        grad_matrix_basis = torch.zeros_like(matrix_basis)
-        grad_matrix_world = grad_out.clone()
-        EvalMatrixWorld.cpp_grad_matrix_world(
-            ctypes.c_ulonglong(parents.shape[0]),
-            ctypes.c_void_p(parents.data_ptr()),
-            ctypes.c_void_p(matrix_bones.data_ptr()),
-            ctypes.c_void_p(matrix_basis.data_ptr()),
-            ctypes.c_void_p(matrix_world.data_ptr()),
-            ctypes.c_void_p(grad_matrix_basis.data_ptr()),
-            ctypes.c_void_p(grad_matrix_world.data_ptr()),
-        )
-        return None, None, grad_matrix_basis
-
-eval_matrix_world = EvalMatrixWorld.apply
 
 
 class SkeletonIKSolver:
@@ -131,7 +94,32 @@ class SkeletonIKSolver:
         self.euler_angle_history, self.location_history = [], []
         self.align_scale = torch.tensor(0.0)
 
+        # OneEuroFilter for real-time smoothing
+        self.one_euro_euler = OneEuroFilter(min_cutoff=0.01, beta=0.1) # Tuned for stability
+        self.one_euro_loc = OneEuroFilter(min_cutoff=0.01, beta=0.1)
+
+        # Hip correction indices
+        try:
+            self.left_hip_idx = self.keypoints.index('left_hip')
+            self.right_hip_idx = self.keypoints.index('right_hip')
+        except ValueError:
+            self.left_hip_idx = -1
+            self.right_hip_idx = -1
+
     def fit(self, kpts: torch.Tensor, valid: torch.Tensor, frame_t: float):
+        # --- Wide Hip Compensation ---
+        # Artificially widen the hips in the input keypoints to prevent leg clamping
+        if self.left_hip_idx >= 0 and self.right_hip_idx >= 0:
+            kpts = kpts.clone() # Do not modify original
+            l_hip = kpts[self.left_hip_idx]
+            r_hip = kpts[self.right_hip_idx]
+            center = (l_hip + r_hip) / 2
+            half_vec = (r_hip - l_hip) / 2
+            # Narrow hips to prevent leg clamping (force legs outward)
+            scale_factor = 0.75
+            kpts[self.left_hip_idx] = center - half_vec * scale_factor
+            kpts[self.right_hip_idx] = center + half_vec * scale_factor
+
         optimizer = torch.optim.LBFGS(
             [self.optim_bone_euler], 
             line_search_fn='strong_wolfe', 
@@ -174,10 +162,23 @@ class SkeletonIKSolver:
         matrix_world = torch.tensor([align_scale, align_scale, align_scale, 1.])[None, :, None] * eval_matrix_world(self.bone_parents_id, self.bone_matrix, matrix_basis)
         location = kpts[self.align_location_kpts].mean(dim=0) - matrix_world[self.align_location_bones, :3, 3].mean(dim=0)
 
-        self.euler_angle_history.append((self.optim_bone_euler.detach().clone(), frame_t))
-        self.location_history.append((location, frame_t))
+        # Apply OneEuroFilter
+        filtered_euler = self.one_euro_euler(self.optim_bone_euler.detach(), frame_t)
+        filtered_location = self.one_euro_loc(location, frame_t)
+
+        self.euler_angle_history.append((filtered_euler, frame_t))
+        self.location_history.append((filtered_location, frame_t))
 
     def get_smoothed_bone_euler(self, query_t: float) -> torch.Tensor:
+        # Since we are already filtering in fit(), simply returning the latest value is often enough for real-time.
+        # However, to maintain compatibility with the existing structure and handle minor time discrepancies:
+        if len(self.euler_angle_history) > 0:
+             # Just return the latest if it's close enough, effectively using OneEuro result
+            last_euler, last_t = self.euler_angle_history[-1]
+            if abs(last_t - query_t) < 0.1: 
+                return last_euler
+        
+        # Fallback to MLS if history is populated but time is weird (though unlikely in this loop)
         input_euler, input_t = zip(*((e, t) for e, t in self.euler_angle_history if abs(t - query_t) < self.smooth_range))
         if len(input_t) <= 2:
             joints_smoothed = input_euler[-1]
@@ -189,6 +190,11 @@ class SkeletonIKSolver:
         return self.align_scale
 
     def get_smoothed_location(self, query_t: float) -> torch.Tensor:
+        if len(self.location_history) > 0:
+            last_loc, last_t = self.location_history[-1]
+            if abs(last_t - query_t) < 0.1:
+                return last_loc
+
         input_location, input_t = zip(*((e, t) for e, t in self.location_history if abs(t - query_t) < self.smooth_range))
         if len(input_t) <= 2:
             location_smoothed = input_location[-1]

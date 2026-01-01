@@ -3,7 +3,7 @@ import bpy
 import numpy as np
 import json
 
-SAVE_DIR = "tmp\\skeleton"
+SAVE_DIR = os.path.join("tmp", "skeleton")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 def iterdfs(bone):

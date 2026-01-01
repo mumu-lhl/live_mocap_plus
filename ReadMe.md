@@ -4,10 +4,32 @@
 
 ## Requirements
 
-* python>=3.8
+* python>=3.12
     * mediapipe
     * pytorch (cpu version is ok)
 * blender >= 3.0 (for reading assets and binding animation)
+
+## 安装依赖
+
+推荐使用 uv。
+
+```bash
+$ uv venv
+$ python .venv/bin/activate_this.py
+$ uv sync
+```
+
+## 模型准备
+
+到 https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/index?hl=zh-cn#models 下载 full 模型到项目目录下。
+
+## 使用示例
+
+```bash
+$ python mocap.py --blend assets/mixamo.blend --video test.mp4
+```
+
+运行后会出现一个窗口，使用 R 键旋转，矫正视频旋转，按空格键确定。
 
 ## How to use
 

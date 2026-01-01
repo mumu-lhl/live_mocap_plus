@@ -80,8 +80,8 @@ class SkeletonIKSolver:
         self.max_iter = kwargs.get('max_iter', 24)
         self.tolerance_change = kwargs.get('tolerance_change', 1e-6)
         self.tolerance_grad = kwargs.get('tolerance_grad', 1e-4)
-        self.joint_constraint_loss_weight = kwargs.get('joint_constraint_loss_weight', 1)
-        self.pose_reg_loss_weight = kwargs.get('pose_reg_loss_weight', 0.1)
+        self.joint_constraint_loss_weight = kwargs.get('joint_constraint_loss_weight', 0.1)
+        self.pose_reg_loss_weight = kwargs.get('pose_reg_loss_weight', 0.0)
         self.smooth_range = kwargs.get('smooth_range', 0.3)
 
         # optimizable bone euler angles
@@ -95,8 +95,9 @@ class SkeletonIKSolver:
         self.align_scale = torch.tensor(0.0)
 
         # OneEuroFilter for real-time smoothing
-        self.one_euro_euler = OneEuroFilter(min_cutoff=0.01, beta=0.1) # Tuned for stability
-        self.one_euro_loc = OneEuroFilter(min_cutoff=0.01, beta=0.1)
+        # High min_cutoff (1.0) reduces lag significantly. Low beta (0.005) minimizes jitter at speed.
+        self.one_euro_euler = OneEuroFilter(min_cutoff=1.0, beta=0.005) 
+        self.one_euro_loc = OneEuroFilter(min_cutoff=1.0, beta=0.005)
 
         # Hip correction indices
         try:
@@ -107,18 +108,7 @@ class SkeletonIKSolver:
             self.right_hip_idx = -1
 
     def fit(self, kpts: torch.Tensor, valid: torch.Tensor, frame_t: float):
-        # --- Wide Hip Compensation ---
-        # Artificially widen the hips in the input keypoints to prevent leg clamping
-        if self.left_hip_idx >= 0 and self.right_hip_idx >= 0:
-            kpts = kpts.clone() # Do not modify original
-            l_hip = kpts[self.left_hip_idx]
-            r_hip = kpts[self.right_hip_idx]
-            center = (l_hip + r_hip) / 2
-            half_vec = (r_hip - l_hip) / 2
-            # Narrow hips to prevent leg clamping (force legs outward)
-            scale_factor = 0.75
-            kpts[self.left_hip_idx] = center - half_vec * scale_factor
-            kpts[self.right_hip_idx] = center + half_vec * scale_factor
+        # Hip compensation removed as it might be too restrictive
 
         optimizer = torch.optim.LBFGS(
             [self.optim_bone_euler], 

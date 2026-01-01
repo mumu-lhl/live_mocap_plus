@@ -53,7 +53,7 @@ WEIGHTS = {
 }
 
 class BodyKeypointTrack:
-    def __init__(self, im_width: int, im_height: int, fov: float, frame_rate: float, *, track_hands: bool = False, model_path: str = 'pose_landmarker_heavy.task', model_complexity=1, smooth_range: float = 0.3, smooth_range_barycenter: float = 1.0):
+    def __init__(self, im_width: int, im_height: int, fov: float, frame_rate: float, *, track_hands: bool = False, model_path: str = 'pose_landmarker_full.task', model_complexity=1, smooth_range: float = 0.3, smooth_range_barycenter: float = 1.0):
         self.K = intrinsic_from_fov(fov, im_width, im_height)
         self.im_width, self.im_height = im_width, im_height
         self.frame_delta = 1. / frame_rate

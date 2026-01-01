@@ -122,16 +122,15 @@ def main():
         fov=FOV,
         frame_rate=frame_rate,
         track_hands=args.track_hands,
-        smooth_range=10 * (1 / frame_rate),
-        smooth_range_barycenter=30 * (1 / frame_rate),
-        model_path='pose_landmarker_heavy.task'
+        smooth_range=3 * (1 / frame_rate), # Reduced even further for responsiveness
+        smooth_range_barycenter=10 * (1 / frame_rate),
     )
 
     # Initialize the skeleton IK solver
     skeleton_ik_solver = SkeletonIKSolver(
         model_path='tmp/skeleton',
         track_hands=args.track_hands,
-        smooth_range=15 * (1 / frame_rate),
+        smooth_range=3 * (1 / frame_rate), # Consistent with tracker
     )
 
     bone_euler_sequence, scale_sequence, location_sequence = [], [], []

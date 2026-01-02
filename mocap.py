@@ -15,7 +15,7 @@ import cv2
 import torch
 from tqdm import tqdm
 
-from body_keypoint_track import BodyKeypointTrack, show_annotation
+from body_keypoint_track import BodyKeypointTrack, show_annotation, MEDIAPIPE_POSE_CONNECTIONS
 from skeleton_ik_solver import SkeletonIKSolver
 
 
@@ -68,6 +68,7 @@ def main():
     parser.add_argument('--track_hands', action='store_true', help='Enable hand tracking')
     parser.add_argument('--rotation', type=int, default=None, choices=[0, 1, 2, 3], help='Rotation code: 0: 0, 1: 90CW, 2: 180, 3: 90CCW')
     parser.add_argument('--no_gui', action='store_true', help='Disable GUI preview')
+    parser.add_argument('--preview_3d', action='store_true', help='Enable 3D preview with Matplotlib')
 
     args = parser.parse_args()
     FOV = np.pi / 3
@@ -133,6 +134,14 @@ def main():
         smooth_range=3 * (1 / frame_rate), # Consistent with tracker
     )
 
+    if args.preview_3d:
+        import matplotlib.pyplot as plt
+        # noinspection PyUnresolvedReferences
+        from mpl_toolkits.mplot3d import Axes3D
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111, projection='3d')
+        plt.ion()
+
     bone_euler_sequence, scale_sequence, location_sequence = [], [], []
 
     frame_t = 0.0
@@ -172,6 +181,28 @@ def main():
             if cv2.waitKey(1) == 27:
                 print('Cancelled by user. Exit.')
                 exit()
+        
+        if args.preview_3d:
+            ax.clear()
+            ax.set_xlabel('X')
+            ax.set_ylabel('Z (Depth)')
+            ax.set_zlabel('Y (Height)')
+            ax.set_xlim(-1, 1)
+            ax.set_ylim(0, 4)
+            ax.set_zlim(-1, 1)
+            
+            xs = kpts3d[:, 0]
+            ys = kpts3d[:, 2]
+            zs = -kpts3d[:, 1]
+            
+            ax.scatter(xs, ys, zs, s=20)
+            
+            for a, b in MEDIAPIPE_POSE_CONNECTIONS:
+                if valid[a] and valid[b]:
+                    ax.plot([xs[a], xs[b]], [ys[a], ys[b]], [zs[a], zs[b]], color='b')
+            
+            plt.draw()
+            plt.pause(0.001)
 
         frame_i += 1
         frame_t += 1.0 / frame_rate
